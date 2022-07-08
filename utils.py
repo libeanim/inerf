@@ -17,6 +17,8 @@ def config_parser():
                         help='config file path')
     parser.add_argument("--model_name", type=str,
                         help='name of the nerf model')
+    parser.add_argument("--test_img_name", type=str,
+                        help='name of the test image')
     parser.add_argument("--output_dir", type=str, default='./output/',
                         help='where to store output images/videos')
     parser.add_argument("--ckpt_dir", type=str, default='./ckpts',

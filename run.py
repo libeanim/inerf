@@ -1,4 +1,5 @@
 import os
+import time
 import torch
 import imageio
 import numpy as np
@@ -17,9 +18,10 @@ def run():
     # Parameters
     parser = config_parser()
     args = parser.parse_args()
-    output_dir = args.output_dir
     model_name = args.model_name
+    test_img_name = args.test_img_name
     obs_img_num = args.obs_img_num
+    output_dir = os.path.join(args.output_dir, f'{test_img_name}_{obs_img_num}')
     batch_size = args.batch_size
     spherify = args.spherify
     kernel_size = args.kernel_size
@@ -33,12 +35,12 @@ def run():
     # Load and pre-process an observed image
     # obs_img -> rgb image with elements in range 0...255
     if dataset_type == 'blender':
-        obs_img, hwf, start_pose, obs_img_pose = load_blender(args.data_dir, model_name, obs_img_num,
+        obs_img, hwf, start_pose, obs_img_pose = load_blender(args.data_dir, test_img_name, obs_img_num,
                                                 args.half_res, args.white_bkgd, delta_phi, delta_theta, delta_psi, delta_t)
         H, W, focal = hwf
         near, far = 2., 6.  # Blender
     else:
-        obs_img, hwf, start_pose, obs_img_pose, bds = load_llff_data(args.data_dir, model_name, obs_img_num, delta_phi,
+        obs_img, hwf, start_pose, obs_img_pose, bds = load_llff_data(args.data_dir, test_img_name, obs_img_num, delta_phi,
                                                 delta_theta, delta_psi, delta_t, factor=8, recenter=True, bd_factor=.75, spherify=spherify)
         H, W, focal = hwf
         H, W = int(H), int(W)
@@ -130,8 +132,11 @@ def run():
     # imgs - array with images are used to create a video of optimization process
     if OVERLAY is True:
         imgs = []
+    # save the losses to compare them
+    losses = []
 
-    for k in range(300):
+    start_time = time.time()
+    for k in range(1000):
 
         if sampling_strategy == 'random':
             rand_inds = np.random.choice(coords.shape[0], size=batch_size, replace=False)
@@ -170,6 +175,7 @@ def run():
 
         optimizer.zero_grad()
         loss = img2mse(rgb, target_s)
+        losses.append(loss.cpu().item())
         loss.backward()
         optimizer.step()
 
@@ -210,11 +216,18 @@ def run():
                     imageio.imwrite(filename, dst)
                     imgs.append(dst)
 
+    print(f'Time elapsed: {time.time() - start_time}s')
     if OVERLAY is True:
         imageio.mimwrite(os.path.join(testsavedir, 'video.gif'), imgs, fps=8) #quality = 8 for mp4 format
+    
+    # Save losses in text file
+    with open(os.path.join(output_dir, f'{model_name}.txt'), 'w') as f:
+        f.write(f'sampling_strategy = {sampling_strategy}\n\n')
+        losses = map(str, losses)
+        f.write('\n'.join(losses))
 
 DEBUG = False
-OVERLAY = False
+OVERLAY = True
 
 if __name__=='__main__':
     torch.set_default_tensor_type('torch.cuda.FloatTensor')
