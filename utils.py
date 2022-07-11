@@ -1,9 +1,13 @@
+import typing
+import warnings
 import torch
 import numpy as np
+import numpy.typing as npt
 import imageio
 import cv2
 import json
 import os
+from scipy.spatial.transform import Rotation as R
 
 
 def config_parser():
@@ -92,14 +96,10 @@ def config_parser():
     parser.add_argument("--sampling_strategy", type=str, default='random',
                         help='options: random / interest_point / interest_region')
     # parameters to define initial pose
-    parser.add_argument("--delta_psi", type=float, default=0.0,
-                        help='Rotate camera around x axis')
-    parser.add_argument("--delta_phi", type=float, default=0.0,
-                        help='Rotate camera around z axis')
-    parser.add_argument("--delta_theta", type=float, default=0.0,
-                        help='Rotate camera around y axis')
-    parser.add_argument("--delta_t", type=float, default=0.0,
-                        help='translation of camera (negative = zoom in)')
+    parser.add_argument("--t_min", type=float, default=0.0,
+                        help='Minimum translation distance of start pose')
+    parser.add_argument("--t_max", type=float, default=1.0,
+                        help='Maximum translation distance of start pose')
     # apply noise to observed image
     parser.add_argument("--noise", type=str, default='None',
                         help='options: gauss / salt / pepper / sp / poisson')
@@ -136,7 +136,42 @@ trans_t = lambda t: np.array([
         [0, 0, 1, t],
         [0, 0, 0, 1]])
 
-def load_blender(data_dir, model_name, obs_img_num, half_res, white_bkgd, *kwargs):
+
+def sample_from_sphere_uniform(ndim: int, r: float) -> npt.NDArray[typing.Any]:
+    """Samples a random point on the `ndim`-dimensional sphere of radius `r`.
+    
+    Exploits that a multivariate normal distribution is spherical in $\mathbb R^n$, then normalizes and scales by `r`.
+    """
+    out = np.zeros(ndim)
+    while np.linalg.norm(out) == 0:
+        out = np.random.randn(ndim)
+    
+    out /= np.linalg.norm(out)
+    out *= r
+    return out
+
+
+def get_random_pose(t_min: float=0., t_max: float=1) -> npt.NDArray[typing.Any]:
+    """Returns the transformation matrix (in homogeneous coordinates) for a random 6D starting pose.
+
+    The pose is defined by a 3D orientation and a 3D translation.
+    The orientation is sampled uniformely on SO(3).
+    The translation is sampled uniformely from a sphere with radius t in the interval specified by `t_lim`.
+    """
+    warnings.warn("Don't forget to seed numpy for reproducability when using this function.")
+    # sample uniform orientation
+    orientation = np.eye(4)
+    orientation[:3, :3] = R.random().as_matrix()
+
+    # sample translation
+    t = np.random.uniform(t_min, t_max)
+    translation = np.eye(4)
+    translation[:3, 3:] = np.expand_dims(sample_from_sphere_uniform(3, t), axis=1)
+    pose = translation @ orientation
+    return pose
+
+
+def load_blender(data_dir, model_name, obs_img_num, half_res, white_bkgd, *args, **kwargs):
 
     with open(os.path.join(data_dir + str(model_name) + "/obs_imgs/", 'transforms.json'), 'r') as fp:
         meta = json.load(fp)
@@ -161,8 +196,7 @@ def load_blender(data_dir, model_name, obs_img_num, half_res, white_bkgd, *kwarg
 
     img_rgb = np.asarray(img_rgb*255, dtype=np.uint8)
     obs_img_pose = np.array(frames[obs_img_num]['transform_matrix']).astype(np.float32)
-    phi, theta, psi, t = kwargs
-    start_pose =  trans_t(t) @ rot_phi(phi/180.*np.pi) @ rot_theta(theta/180.*np.pi) @ rot_psi(psi/180.*np.pi)  @ obs_img_pose
+    start_pose =  get_random_pose(**kwargs)
     return img_rgb, [H, W, focal], start_pose, obs_img_pose # image of type uint8
 
 
@@ -400,7 +434,7 @@ def spherify_poses(poses, bds):
     return poses_reset, bds
 
 
-def load_llff_data(data_dir, model_name, obs_img_num, *kwargs, factor=8, recenter=True, bd_factor=.75, spherify=False):
+def load_llff_data(data_dir, model_name, obs_img_num, *args, factor=8, recenter=True, bd_factor=.75, spherify=False, **kwargs):
     poses, bds, imgs = _load_data(data_dir + str(model_name) + "/", factor=factor)  # factor=8 downsamples original imgs by 8x
     print('Loaded', data_dir + str(model_name) + "/", bds.min(), bds.max())
 
@@ -428,6 +462,5 @@ def load_llff_data(data_dir, model_name, obs_img_num, *kwargs, factor=8, recente
     poses = poses[:,:3,:4]
     obs_img = images[obs_img_num]
     obs_img_pose = np.concatenate((poses[obs_img_num], np.array([[0,0,0,1.]])), axis=0)
-    phi, theta, psi, t = kwargs
-    start_pose = rot_phi(phi/180.*np.pi) @ rot_theta(theta/180.*np.pi) @ rot_psi(psi/180.*np.pi) @ trans_t(t) @ obs_img_pose
+    start_pose = get_random_pose(**kwargs)
     return obs_img, hwf, start_pose, obs_img_pose, bds
