@@ -22,3 +22,6 @@ ipython_config.py
 # Training data
 logs/
 tiny_nerf_data.npzoutput/lego
+
+# Outputs
+output/
