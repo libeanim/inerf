@@ -96,10 +96,14 @@ def config_parser():
     parser.add_argument("--sampling_strategy", type=str, default='random',
                         help='options: random / interest_point / interest_region')
     # parameters to define initial pose
+    parser.add_argument("--delta_d", nargs=2, type=float, default=[-1, 3],
+                        help='Distance offsets compared to original pose')
     parser.add_argument("--t_min", type=float, default=0.0,
                         help='Minimum translation distance of start pose')
     parser.add_argument("--t_max", type=float, default=1.0,
                         help='Maximum translation distance of start pose')
+    parser.add_argument("--no_clamp_uh", dest='clamp_uh', action='store_false',
+                        help='do not clamp sampled viewpoints to upper hemisphere')
     # apply noise to observed image
     parser.add_argument("--noise", type=str, default='None',
                         help='options: gauss / salt / pepper / sp / poisson')
@@ -131,11 +135,10 @@ rot_phi = lambda psi: np.array([
         [0, 0, 0, 1]])
 
 trans_t = lambda t: np.array([
-        [1, 0, 0, 0],
-        [0, 1, 0, 0],
-        [0, 0, 1, t],
+        [1, 0, 0, t[0]],
+        [0, 1, 0, t[1]],
+        [0, 0, 1, t[2]],
         [0, 0, 0, 1]])
-
 
 def sample_from_sphere_uniform(ndim: int, r: float) -> npt.NDArray[typing.Any]:
     """Samples a random point on the `ndim`-dimensional sphere of radius `r`.
@@ -151,27 +154,32 @@ def sample_from_sphere_uniform(ndim: int, r: float) -> npt.NDArray[typing.Any]:
     return out
 
 
-def get_random_pose(t_min: float=0., t_max: float=1) -> npt.NDArray[typing.Any]:
+def get_random_pose(d_min: float=3, d_max: float=5, t_min: float=0, t_max: float=0.5, clamp_uh: bool=True) -> npt.NDArray[typing.Any]:
     """Returns the transformation matrix (in homogeneous coordinates) for a random 6D starting pose.
 
-    The pose is defined by a 3D orientation and a 3D translation.
-    The orientation is sampled uniformely on SO(3).
-    The translation is sampled uniformely from a sphere with radius t in the interval specified by `t_lim`.
+    The pose is defined by a 3D rotation and a 3D translation.
+    The rotation is sampled uniformly on SO(3) or its subset which results in a viewpoint in the upper hemisphere if `clamp_uh` is True.
+    The translation along the z-axis (view axis, equivalent to distance from object) is sampled uniformly from [`d_min`, `d_max`].
+    Translations along the x- and y-axis (orthogonal to view axis) are sampled uniformly from [`t_min`, `t_max`].
     """
     warnings.warn("Don't forget to seed numpy for reproducability when using this function.")
-    # sample uniform orientation
-    orientation = np.eye(4)
-    orientation[:3, :3] = R.random().as_matrix()
+    # sample uniform rotation
+    rotation = np.eye(4)
+    rotation[:3, :3] = R.random().as_matrix()
+    while clamp_uh and np.dot([0, 0, 1], np.dot(rotation[:3, :3], [0, 0, 1])) < 0:
+        rotation[:3, :3] = R.random().as_matrix()
 
     # sample translation
-    t = np.random.uniform(t_min, t_max)
-    translation = np.eye(4)
-    translation[:3, 3:] = np.expand_dims(sample_from_sphere_uniform(3, t), axis=1)
-    pose = translation @ orientation
+    z = np.random.uniform(d_min, d_max, 1)
+    xy = np.random.uniform(t_min, t_max, 2)
+    translation = trans_t(np.concatenate([xy, z]))
+
+    # rotate around origin, then translate
+    pose = rotation @ translation
     return pose
 
 
-def load_blender(data_dir, model_name, obs_img_num, half_res, white_bkgd, *args, **kwargs):
+def load_blender(data_dir, model_name, obs_img_num, half_res, white_bkgd, *args, delta_d: typing.Tuple=(-1, 2), **kwargs):
 
     with open(os.path.join(data_dir + str(model_name) + "/obs_imgs/", 'transforms.json'), 'r') as fp:
         meta = json.load(fp)
@@ -196,7 +204,8 @@ def load_blender(data_dir, model_name, obs_img_num, half_res, white_bkgd, *args,
 
     img_rgb = np.asarray(img_rgb*255, dtype=np.uint8)
     obs_img_pose = np.array(frames[obs_img_num]['transform_matrix']).astype(np.float32)
-    start_pose =  get_random_pose(**kwargs)
+    d = np.linalg.norm(obs_img_pose[:3, 3:])
+    start_pose =  get_random_pose(d+delta_d[0], d+delta_d[1], **kwargs)
     return img_rgb, [H, W, focal], start_pose, obs_img_pose # image of type uint8
 
 
@@ -462,5 +471,6 @@ def load_llff_data(data_dir, model_name, obs_img_num, *args, factor=8, recenter=
     poses = poses[:,:3,:4]
     obs_img = images[obs_img_num]
     obs_img_pose = np.concatenate((poses[obs_img_num], np.array([[0,0,0,1.]])), axis=0)
-    start_pose = get_random_pose(**kwargs)
+    d = np.linalg.norm(obs_img_pose[:3, 3:])
+    start_pose =  get_random_pose(d+delta_d[0], d+delta_d[1], **kwargs)
     return obs_img, hwf, start_pose, obs_img_pose, bds
