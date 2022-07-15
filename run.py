@@ -26,7 +26,7 @@ def run():
     lrate = args.lrate
     dataset_type = args.dataset_type
     sampling_strategy = args.sampling_strategy
-    delta_phi, delta_theta, delta_psi, delta_t = args.delta_phi, args.delta_theta, args.delta_psi, args.delta_t
+    delta_d, t_min, t_max, clamp_uh = tuple(args.delta_d), args.t_min, args.t_max, args.clamp_uh
     noise, sigma, amount = args.noise, args.sigma, args.amount
     delta_brightness = args.delta_brightness
 
@@ -34,12 +34,11 @@ def run():
     # obs_img -> rgb image with elements in range 0...255
     if dataset_type == 'blender':
         obs_img, hwf, start_pose, obs_img_pose = load_blender(args.data_dir, model_name, obs_img_num,
-                                                args.half_res, args.white_bkgd, delta_phi, delta_theta, delta_psi, delta_t)
+                                                args.half_res, args.white_bkgd, delta_d=delta_d, t_min=t_min, t_max=t_max, clamp_uh=clamp_uh)
         H, W, focal = hwf
         near, far = 2., 6.  # Blender
     else:
-        obs_img, hwf, start_pose, obs_img_pose, bds = load_llff_data(args.data_dir, model_name, obs_img_num, delta_phi,
-                                                delta_theta, delta_psi, delta_t, factor=8, recenter=True, bd_factor=.75, spherify=spherify)
+        obs_img, hwf, start_pose, obs_img_pose, bds = load_llff_data(args.data_dir, model_name, obs_img_num, factor=8, recenter=True, bd_factor=.75, spherify=spherify, delta_d=delta_d, t_min=t_min, t_max=t_max, clamp_uh=clamp_uh)
         H, W, focal = hwf
         H, W = int(H), int(W)
         if args.no_ndc:
@@ -47,7 +46,7 @@ def run():
             far = np.ndarray.max(bds) * 1.
         else:
             near = 0.
-            far = 1.
+            far = 20.
 
     obs_img = (np.array(obs_img) / 255.).astype(np.float32)
 
@@ -214,7 +213,7 @@ def run():
         imageio.mimwrite(os.path.join(testsavedir, 'video.gif'), imgs, fps=8) #quality = 8 for mp4 format
 
 DEBUG = False
-OVERLAY = False
+OVERLAY = True
 
 if __name__=='__main__':
     torch.set_default_tensor_type('torch.cuda.FloatTensor')
