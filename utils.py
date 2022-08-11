@@ -27,6 +27,8 @@ def config_parser():
                         help='where to store output images/videos')
     parser.add_argument("--ckpt_dir", type=str, default='./ckpts',
                         help='folder with saved checkpoints')
+    parser.add_argument("--tensorf_model_name", type=str,
+                        help='name of the tensorf model')
 
     # training options
     parser.add_argument("--netdepth", type=int, default=8,
