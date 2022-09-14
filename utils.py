@@ -116,10 +116,10 @@ def config_parser():
 
     return parser
 
-rot_psi = lambda phi: np.array([
+rot_psi = lambda psi: np.array([
         [1, 0, 0, 0],
-        [0, np.cos(phi), -np.sin(phi), 0],
-        [0, np.sin(phi), np.cos(phi), 0],
+        [0, np.cos(psi), -np.sin(psi), 0],
+        [0, np.sin(psi), np.cos(psi), 0],
         [0, 0, 0, 1]])
 
 rot_theta = lambda th: np.array([
@@ -128,9 +128,9 @@ rot_theta = lambda th: np.array([
         [np.sin(th), 0, np.cos(th), 0],
         [0, 0, 0, 1]])
 
-rot_phi = lambda psi: np.array([
-        [np.cos(psi), -np.sin(psi), 0, 0],
-        [np.sin(psi), np.cos(psi), 0, 0],
+rot_phi = lambda phi: np.array([
+        [np.cos(phi), -np.sin(phi), 0, 0],
+        [np.sin(phi), np.cos(phi), 0, 0],
         [0, 0, 1, 0],
         [0, 0, 0, 1]])
 
@@ -177,6 +177,28 @@ def get_random_pose(d_min: float=3, d_max: float=5, t_min: float=0, t_max: float
     # rotate around origin, then translate
     pose = rotation @ translation
     return pose
+
+
+def get_spiral_poses(n: int, r: float=4, phi_0: float=0, d_phi: float=5, psi_0: float=45, d_psi: float=0) -> typing.List[npt.NDArray[typing.Any]]:
+    """Get `n` camera poses on a spiral around the object.
+
+    :param n: number of poses
+    :param r: distance to object
+    :param phi_0: initial azimutal angle in degrees
+    :param d_phi: azimuthal angle between poses in degrees
+    :param psi_0: initial polar angle in degrees
+    :param d_psi: polar angle between poses in degrees (set to 0 for camera orbit at constant y)
+    """
+    out = []
+
+    for i in range(n):
+        phi = (phi_0 + i * d_phi) / 180 * np.pi
+        psi = min(max(psi_0 + i * d_psi, 0), 90) / 180 * np.pi
+        t = (0, 0, r)
+
+        out.append(np.eye(4) @ rot_phi(phi) @ rot_psi(psi) @ trans_t(t))
+
+    return out
 
 
 def load_blender(data_dir, model_name, obs_img_num, half_res, white_bkgd, *args, delta_d: typing.Tuple=(-1, 2), **kwargs):
