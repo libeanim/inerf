@@ -4,6 +4,7 @@ import imageio
 import cv2
 import json
 import os
+import matplotlib.pyplot as plt
 
 
 def config_parser():
@@ -175,9 +176,12 @@ def rgb2bgr(img_rgb):
 
 def show_img(title, img_rgb):  # img - rgb image
     img_bgr = rgb2bgr(img_rgb)
-    cv2.imshow(title, img_bgr)
-    cv2.waitKey(0)
-    cv2.destroyAllWindows()
+    # cv2.imshow(title, img_bgr)
+    # cv2.waitKey(0)
+    # cv2.destroyAllWindows()
+    plt.figure(figsize=(10,8))
+    plt.imshow(img_rgb)
+    plt.savefig(title)
 
 
 def find_POI(img_rgb, DEBUG=False): # img - RGB image in range 0...255

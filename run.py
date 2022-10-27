@@ -78,12 +78,16 @@ def run():
         obs_img_noised = skimage.util.random_noise(obs_img, mode='salt', amount=amount)
     elif noise == 'poisson':
         obs_img_noised = skimage.util.random_noise(obs_img, mode='poisson')
+    elif noise == 'gaussian_blur':
+        from corruptions import Corruptions
+        corps = Corruptions('gaussian_blur', 2)
+        obs_img_noised = corps(obs_img)
     else:
         obs_img_noised = obs_img
 
     obs_img_noised = (np.array(obs_img_noised) * 255).astype(np.uint8)
     if DEBUG:
-        show_img("Observed image", obs_img_noised)
+        show_img(f"{output_dir}/observed_image.png", obs_img_noised)
 
     # find points of interest of the observed image
     POI = find_POI(obs_img_noised, DEBUG)  # xy pixel coordinates of points of interest (N x 2)
@@ -136,7 +140,7 @@ def run():
     losses = []
 
     start_time = time.time()
-    for k in range(1000):
+    for k in range(500):
 
         if sampling_strategy == 'random':
             rand_inds = np.random.choice(coords.shape[0], size=batch_size, replace=False)
@@ -210,7 +214,7 @@ def run():
                     rgb, disp, acc, _ = render(H, W, focal, chunk=args.chunk, c2w=pose[:3, :4], **render_kwargs)
                     rgb = rgb.cpu().detach().numpy()
                     rgb8 = to8b(rgb)
-                    ref = to8b(obs_img)
+                    ref = to8b(obs_img_noised)
                     filename = os.path.join(testsavedir, str(k)+'.png')
                     dst = cv2.addWeighted(rgb8, 0.7, ref, 0.3, 0)
                     imageio.imwrite(filename, dst)
@@ -226,7 +230,7 @@ def run():
         losses = map(str, losses)
         f.write('\n'.join(losses))
 
-DEBUG = False
+DEBUG = True
 OVERLAY = True
 
 if __name__=='__main__':
