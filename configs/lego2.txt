@@ -1,0 +1,30 @@
+model_name = lego
+test_img_name = lego
+output_dir = ./output/lego_trf
+dataset_type = blender
+data_dir = ./data/nerf_synthetic/
+
+use_viewdirs = True
+white_bkgd = True
+N_samples = 64
+N_importance = 64
+half_res = True
+
+obs_img_num = 2
+dil_iter = 3
+kernel_size = 5
+batch_size = 2048
+lrate = 0.02
+sampling_strategy = random
+
+noise = None
+sigma = 0.01
+amount = 0.8
+delta_brightness = 0.
+
+delta_phi = 10.
+delta_theta = 0.
+delta_psi = 0.
+delta_t = 0.
+
+ckpt_dir = ./TensoRF/log/tensorf_lego_CP2/tensorf_lego_CP2.th
