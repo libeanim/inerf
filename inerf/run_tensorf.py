@@ -13,7 +13,7 @@ from render_helpers import render, to8b, get_rays
 from inerf_helpers import camera_transf
 
 import sys
-sys.path.insert(0, './TensoRF')  # Path to the TensoRF project folder!
+sys.path.insert(0, '../TensoRF')  # Path to the TensoRF project folder!
 from renderer import OctreeRender_trilinear_fast
 from models.tensoRF import TensorVMSplit, TensorCP
 import dataLoader.ray_utils as trf_ru
