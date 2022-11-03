@@ -29,13 +29,30 @@ def load_nerf(args, device):
     ckpt_dir = args.ckpt_dir
     ckpt_name = args.model_name
     ckpt_path = os.path.join(ckpt_dir, ckpt_name+'.tar')
-    print('Found ckpts', ckpt_path)
-    print('Reloading from', ckpt_path)
-    ckpt = torch.load(ckpt_path)
+    if os.path.exists(ckpt_path):
+        print('Found ckpts', ckpt_path)
+        print('Reloading from', ckpt_path)
+        ckpt = torch.load(ckpt_path)
 
-    # Load model
-    model.load_state_dict(ckpt['network_fn_state_dict'])
-    model_fine.load_state_dict(ckpt['network_fine_state_dict'])
+        # Load model
+        model.load_state_dict(ckpt['network_fn_state_dict'])
+        model_fine.load_state_dict(ckpt['network_fine_state_dict'])
+    else:
+        ckpt_path_fine = os.path.join(ckpt_dir, ckpt_name + '_fine.npy')
+        ckpt_path = os.path.join(ckpt_dir, ckpt_name + '.npy')
+        if not os.path.exists(ckpt_path):
+            raise ValueError('No model checkpoint found.')
+        print('Found keras weights.')
+        print('Reloading from', ckpt_path, ckpt_path_fine)
+
+        model_data = np.load(ckpt_path, allow_pickle=True)
+        model_fine_data = np.load(ckpt_path_fine, allow_pickle=True)
+
+        model.load_weights_from_keras(model_data)
+        model_fine.load_weights_from_keras(model_fine_data)
+        model.to(device)
+        model_fine.to(device)
+
 
     render_kwargs = {
         'network_query_fn': network_query_fn,
@@ -60,6 +77,46 @@ def load_nerf(args, device):
         param.requires_grad = False
     for param in model_fine.parameters():
         param.requires_grad = False
+
+    return render_kwargs
+
+def create_nerf(args, device):
+    """Instantiate NeRF's MLP model.
+    """
+    embed_fn, input_ch = get_embedder(args.multires, args.i_embed)
+    embeddirs_fn, input_ch_views = get_embedder(args.multires_views, args.i_embed)
+    output_ch = 4
+    skips = [4]
+    model = NeRF(D=args.netdepth, W=args.netwidth,
+                 input_ch=input_ch, output_ch=output_ch, skips=skips,
+                 input_ch_views=input_ch_views, use_viewdirs=args.use_viewdirs).to(device)
+
+    model_fine = NeRF(D=args.netdepth_fine, W=args.netwidth_fine,
+                      input_ch=input_ch, output_ch=output_ch, skips=skips,
+                      input_ch_views=input_ch_views, use_viewdirs=args.use_viewdirs).to(device)
+
+    network_query_fn = lambda inputs, viewdirs, network_fn: run_network(inputs, viewdirs, network_fn,
+                                                                        embed_fn=embed_fn,
+                                                                        embeddirs_fn=embeddirs_fn,
+                                                                        netchunk=args.netchunk)
+
+    render_kwargs = {
+        'network_query_fn': network_query_fn,
+        'perturb': args.perturb,
+        'N_importance': args.N_importance,
+        'network_fine': model_fine,
+        'N_samples': args.N_samples,
+        'network_fn': model,
+        'use_viewdirs': args.use_viewdirs,
+        'white_bkgd': args.white_bkgd,
+        'raw_noise_std': args.raw_noise_std
+    }
+
+    # NDC only good for LLFF-style forward facing data
+    if args.dataset_type != 'llff' or args.no_ndc:
+        print('Not ndc!')
+        render_kwargs['ndc'] = False
+        render_kwargs['lindisp'] = args.lindisp
 
     return render_kwargs
 
