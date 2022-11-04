@@ -38,7 +38,8 @@ def run():
         obs_img, hwf, start_pose, obs_img_pose = load_blender(args.data_dir, test_img_name, obs_img_num,
                                                 args.half_res, args.white_bkgd, delta_phi, delta_theta, delta_psi, delta_t)
         H, W, focal = hwf
-        near, far = 2., 6.  # Blender
+        # near, far = 2., 6.  # Blender
+        near, far = .5, 8.  # Blender
     else:
         obs_img, hwf, start_pose, obs_img_pose, bds = load_llff_data(args.data_dir, test_img_name, obs_img_num, delta_phi,
                                                 delta_theta, delta_psi, delta_t, factor=8, recenter=True, bd_factor=.75, spherify=spherify)
@@ -230,7 +231,7 @@ def run():
         losses = map(str, losses)
         f.write('\n'.join(losses))
 
-DEBUG = True
+DEBUG = False
 OVERLAY = True
 
 if __name__=='__main__':
