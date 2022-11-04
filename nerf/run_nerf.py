@@ -619,8 +619,11 @@ def train():
               render_poses.shape, hwf, args.datadir)
         i_train, i_val, i_test = i_split
 
-        near = 2.
-        far = 6.
+        # near = 2.
+        # far = 6.
+
+        near = 0.5
+        far = 8.
 
         if args.white_bkgd:
             images = images[..., :3]*images[..., -1:] + (1.-images[..., -1:])
@@ -743,7 +746,8 @@ def train():
         print('done')
         i_batch = 0
 
-    N_iters = 1000000
+    # N_iters = 1000000
+    N_iters = 200_000
     print('Begin')
     print('TRAIN views are', i_train)
     print('TEST views are', i_test)
