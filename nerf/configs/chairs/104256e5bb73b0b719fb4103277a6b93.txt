@@ -1,0 +1,17 @@
+expname = 104256e5bb73b0b719fb4103277a6b93
+basedir = ./logs/chairs
+datadir = ../data/shapenet/chairs/104256e5bb73b0b719fb4103277a6b93
+dataset_type = blender
+
+half_res = True
+no_batching = True
+
+N_samples = 64
+N_importance = 64
+
+use_viewdirs = True
+
+white_bkgd = True
+
+N_rand = 1024
+precrop_iters=500
