@@ -26,7 +26,8 @@ nvidia-smi
 # CONFIG='configs/config_chair.txt'
 # CONFIG='configs/config_chair40.txt'
 # CONFIG='configs/config_chair40_1.txt'
-CONFIG='configs/config_chair50.txt'
+# CONFIG='configs/config_chair50.txt'
+CONFIG=$1
 echo "Using config: $CONFIG"
 singularity exec --nv \
     -B /mnt/qb/datasets,/mnt/qb/work/bethge/ahochlehnert48 docker://libeanim/ml-research:code-blender \

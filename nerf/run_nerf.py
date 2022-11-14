@@ -622,8 +622,8 @@ def train():
         # near = 2.
         # far = 6.
 
-        near = 0.5
-        far = 8.
+        near = 2.
+        far = 9.
 
         if args.white_bkgd:
             images = images[..., :3]*images[..., -1:] + (1.-images[..., -1:])
@@ -747,7 +747,7 @@ def train():
         i_batch = 0
 
     # N_iters = 1000000
-    N_iters = 200_000
+    N_iters = 100_000
     print('Begin')
     print('TRAIN views are', i_train)
     print('TEST views are', i_test)
