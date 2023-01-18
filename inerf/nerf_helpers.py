@@ -6,81 +6,7 @@ import torch.nn.functional as F
 import numpy as np
 
 
-def load_nerf(args, device):
-    """Instantiate NeRF's MLP model.
-    """
-    embed_fn, input_ch = get_embedder(args.multires, args.i_embed)
-    embeddirs_fn, input_ch_views = get_embedder(args.multires_views, args.i_embed)
-    output_ch = 4
-    skips = [4]
-    model = NeRF(D=args.netdepth, W=args.netwidth,
-                 input_ch=input_ch, output_ch=output_ch, skips=skips,
-                 input_ch_views=input_ch_views, use_viewdirs=args.use_viewdirs).to(device)
-
-    model_fine = NeRF(D=args.netdepth_fine, W=args.netwidth_fine,
-                      input_ch=input_ch, output_ch=output_ch, skips=skips,
-                      input_ch_views=input_ch_views, use_viewdirs=args.use_viewdirs).to(device)
-
-    network_query_fn = lambda inputs, viewdirs, network_fn: run_network(inputs, viewdirs, network_fn,
-                                                                        embed_fn=embed_fn,
-                                                                        embeddirs_fn=embeddirs_fn,
-                                                                        netchunk=args.netchunk)
-    # Load checkpoint
-    ckpt_dir = args.ckpt_dir
-    ckpt_name = args.model_name
-    ckpt_path = os.path.join(ckpt_dir, ckpt_name+'.tar')
-    if os.path.exists(ckpt_path):
-        print('Found ckpts', ckpt_path)
-        print('Reloading from', ckpt_path)
-        ckpt = torch.load(ckpt_path)
-
-        # Load model
-        model.load_state_dict(ckpt['network_fn_state_dict'])
-        model_fine.load_state_dict(ckpt['network_fine_state_dict'])
-    else:
-        ckpt_path_fine = os.path.join(ckpt_dir, ckpt_name + '_fine.npy')
-        ckpt_path = os.path.join(ckpt_dir, ckpt_name + '.npy')
-        if not os.path.exists(ckpt_path):
-            raise ValueError('No model checkpoint found.')
-        print('Found keras weights.')
-        print('Reloading from', ckpt_path, ckpt_path_fine)
-
-        model_data = np.load(ckpt_path, allow_pickle=True)
-        model_fine_data = np.load(ckpt_path_fine, allow_pickle=True)
-
-        model.load_weights_from_keras(model_data)
-        model_fine.load_weights_from_keras(model_fine_data)
-        model.to(device)
-        model_fine.to(device)
-
-
-    render_kwargs = {
-        'network_query_fn': network_query_fn,
-        'perturb': args.perturb,
-        'N_importance': args.N_importance,
-        'network_fine': model_fine,
-        'N_samples': args.N_samples,
-        'network_fn': model,
-        'use_viewdirs': args.use_viewdirs,
-        'white_bkgd': args.white_bkgd,
-        'raw_noise_std': args.raw_noise_std
-    }
-
-    # NDC only good for LLFF-style forward facing data
-    if args.dataset_type != 'llff' or args.no_ndc:
-        print('Not ndc!')
-        render_kwargs['ndc'] = False
-        render_kwargs['lindisp'] = args.lindisp
-
-    # Disable updating of the weights
-    for param in model.parameters():
-        param.requires_grad = False
-    for param in model_fine.parameters():
-        param.requires_grad = False
-
-    return render_kwargs
-
-def create_nerf(args, device):
+def create_nerf(args, device, ):
     """Instantiate NeRF's MLP model.
     """
     embed_fn, input_ch = get_embedder(args.multires, args.i_embed)
@@ -204,6 +130,7 @@ class NeRF(nn.Module):
         else:
             self.output_linear = nn.Linear(W, output_ch)
 
+
     def forward(self, x):
         input_pts, input_views = torch.split(x, [self.input_ch, self.input_ch_views], dim=-1)
         h = input_pts
@@ -259,6 +186,45 @@ class NeRF(nn.Module):
         self.alpha_linear.bias.data = torch.from_numpy(np.transpose(weights[idx_alpha_linear + 1]))
 
 
+class NeRFAppearance(NeRF):
+    # def __init__(self, D=8, W=256, input_ch=3, input_ch_views=3, output_ch=4, skips=[4], use_viewdirs=False, appearance_dim=0):
+    #     super().__init__(D, W, input_ch, input_ch_views, output_ch, skips, use_viewdirs)
+
+    #     ### Implementation according to the official code release (https://github.com/bmild/nerf/blob/master/run_nerf_helpers.py#L104-L105)
+    #     self.views_linears = nn.ModuleList([nn.Linear(input_ch_views + W + appearance_dim, W // 2)])
+
+    def load_weights_from_keras(self, weights):
+        self.appearance_dim = weights[-1].shape[1]
+        self.views_linears = nn.ModuleList([nn.Linear(self.input_ch_views + self.W + self.appearance_dim, self.W // 2)])
+        super().load_weights_from_keras(weights)
+        self.appearance_latents = torch.from_numpy(weights[-1])
+
+    def forward(self, x):
+        input_pts, input_views, appearance_latent = torch.split(x, [self.input_ch, self.input_ch_views, self.appearance_dim], dim=-1)
+        h = input_pts
+        for i, l in enumerate(self.pts_linears):
+            h = self.pts_linears[i](h)
+            h = F.relu(h)
+            if i in self.skips:
+                h = torch.cat([input_pts, h], -1)
+
+        if self.use_viewdirs:
+            alpha = self.alpha_linear(h)
+            feature = self.feature_linear(h)
+            h = torch.cat([feature, input_views, appearance_latent], -1)
+
+            for i, l in enumerate(self.views_linears):
+                h = self.views_linears[i](h)
+                h = F.relu(h)
+
+            rgb = self.rgb_linear(h)
+            outputs = torch.cat([rgb, alpha], -1)
+        else:
+            outputs = self.output_linear(h)
+
+        return outputs
+
+
 def batchify(fn, chunk):
     """Constructs a version of 'fn' that applies to smaller batches.
     """
@@ -269,7 +235,7 @@ def batchify(fn, chunk):
     return ret
 
 
-def run_network(inputs, viewdirs, fn, embed_fn, embeddirs_fn, netchunk=1024*64):
+def run_network(inputs, viewdirs, fn, embed_fn, embeddirs_fn, netchunk=1024*64, appearance_latent=None):
     """Prepares inputs and applies network 'fn'.
     """
     inputs_flat = torch.reshape(inputs, [-1, inputs.shape[-1]])
@@ -280,7 +246,87 @@ def run_network(inputs, viewdirs, fn, embed_fn, embeddirs_fn, netchunk=1024*64):
         input_dirs_flat = torch.reshape(input_dirs, [-1, input_dirs.shape[-1]])
         embedded_dirs = embeddirs_fn(input_dirs_flat)
         embedded = torch.cat([embedded, embedded_dirs], -1)
+    if appearance_latent is not None:
+        ae = appearance_latent.expand((embedded.shape[0], len(appearance_latent)))
+        embedded = torch.cat([embedded, ae], -1)
 
     outputs_flat = batchify(fn, netchunk)(embedded)
     outputs = torch.reshape(outputs_flat, list(inputs.shape[:-1]) + [outputs_flat.shape[-1]])
     return outputs
+
+def load_nerf(args, device, NeRFClass=NeRF):
+    """Instantiate NeRF's MLP model.
+    """
+    embed_fn, input_ch = get_embedder(args.multires, args.i_embed)
+    embeddirs_fn, input_ch_views = get_embedder(args.multires_views, args.i_embed)
+    output_ch = 4
+    skips = [4]
+    model = NeRFClass(D=args.netdepth, W=args.netwidth,
+                 input_ch=input_ch, output_ch=output_ch, skips=skips,
+                 input_ch_views=input_ch_views, use_viewdirs=args.use_viewdirs).to(device)
+
+    model_fine = NeRFClass(D=args.netdepth_fine, W=args.netwidth_fine,
+                      input_ch=input_ch, output_ch=output_ch, skips=skips,
+                      input_ch_views=input_ch_views, use_viewdirs=args.use_viewdirs).to(device)
+
+    network_query_fn = lambda inputs, viewdirs, network_fn, appearance_latent=None: run_network(inputs, viewdirs, network_fn,
+                                                                        embed_fn=embed_fn,
+                                                                        embeddirs_fn=embeddirs_fn,
+                                                                        netchunk=args.netchunk, appearance_latent=appearance_latent)
+    # Load checkpoint
+    ckpt_dir = args.ckpt_dir
+    ckpt_name = args.model_name
+    ckpt_path = os.path.join(ckpt_dir, ckpt_name+'.tar')
+    if os.path.exists(ckpt_path):
+        print('Found ckpts', ckpt_path)
+        print('Reloading from', ckpt_path)
+        ckpt = torch.load(ckpt_path)
+
+        # Load model
+        model.load_state_dict(ckpt['network_fn_state_dict'])
+        model_fine.load_state_dict(ckpt['network_fine_state_dict'])
+    else:
+        ckpt_path = os.path.join(ckpt_dir, ckpt_name + '.npy')
+        try:
+            ckpt_path_fine = os.path.join(ckpt_dir, args.model_fine_name + '.npy')
+        except AttributeError:
+            ckpt_path_fine = os.path.join(ckpt_dir, ckpt_name + '_fine.npy')
+        if not os.path.exists(ckpt_path):
+            raise ValueError('No model checkpoint found.')
+        print('Found keras weights.')
+        print('Reloading from', ckpt_path, ckpt_path_fine)
+
+        model_data = np.load(ckpt_path, allow_pickle=True)
+        model_fine_data = np.load(ckpt_path_fine, allow_pickle=True)
+
+        model.load_weights_from_keras(model_data)
+        model_fine.load_weights_from_keras(model_fine_data)
+        model.to(device)
+        model_fine.to(device)
+
+
+    render_kwargs = {
+        'network_query_fn': network_query_fn,
+        'perturb': args.perturb,
+        'N_importance': args.N_importance,
+        'network_fine': model_fine,
+        'N_samples': args.N_samples,
+        'network_fn': model,
+        'use_viewdirs': args.use_viewdirs,
+        'white_bkgd': args.white_bkgd,
+        'raw_noise_std': args.raw_noise_std
+    }
+
+    # NDC only good for LLFF-style forward facing data
+    if args.dataset_type != 'llff' or args.no_ndc:
+        print('Not ndc!')
+        render_kwargs['ndc'] = False
+        render_kwargs['lindisp'] = args.lindisp
+
+    # Disable updating of the weights
+    for param in model.parameters():
+        param.requires_grad = False
+    for param in model_fine.parameters():
+        param.requires_grad = False
+
+    return render_kwargs

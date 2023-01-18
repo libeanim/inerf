@@ -27,7 +27,7 @@ def batchify(fn, chunk):
     return ret
 
 
-def run_network(inputs, viewdirs, fn, embed_fn, embeddirs_fn, netchunk=1024*64):
+def run_network(inputs, viewdirs, fn, embed_fn, embeddirs_fn, netchunk=1024*64, appearance_latent=None):
     """Prepares inputs and applies network 'fn'."""
 
     inputs_flat = tf.reshape(inputs, [-1, inputs.shape[-1]])
@@ -38,6 +38,12 @@ def run_network(inputs, viewdirs, fn, embed_fn, embeddirs_fn, netchunk=1024*64):
         input_dirs_flat = tf.reshape(input_dirs, [-1, input_dirs.shape[-1]])
         embedded_dirs = embeddirs_fn(input_dirs_flat)
         embedded = tf.concat([embedded, embedded_dirs], -1)
+    if appearance_latent is not None:
+        # a = tf.broadcast_to(appearance_latent, inputs.shape)
+        # a_shaped = tf.reshape(a, [-1, a.shape[-1]])
+        # embedded = tf.concat([embedded, a_shaped], -1)
+        a = tf.broadcast_to(appearance_latent, (inputs_flat.shape[0], 1))
+        embedded = tf.concat([embedded, a], -1)
 
     outputs_flat = batchify(fn, netchunk)(embedded)
     outputs = tf.reshape(outputs_flat, list(
@@ -56,7 +62,8 @@ def render_rays(ray_batch,
                 network_fine=None,
                 white_bkgd=False,
                 raw_noise_std=0.,
-                verbose=False):
+                verbose=False,
+                appearance_latent=None):
     """Volumetric rendering.
 
     Args:
@@ -203,7 +210,7 @@ def render_rays(ray_batch,
         z_vals[..., :, None]  # [N_rays, N_samples, 3]
 
     # Evaluate model at each point.
-    raw = network_query_fn(pts, viewdirs, network_fn)  # [N_rays, N_samples, 4]
+    raw = network_query_fn(pts, viewdirs, network_fn, appearance_latent=appearance_latent)  # [N_rays, N_samples, 4]
     rgb_map, disp_map, acc_map, weights, depth_map = raw2outputs(
         raw, z_vals, rays_d)
 
@@ -224,7 +231,7 @@ def render_rays(ray_batch,
 
         # Make predictions with network_fine.
         run_fn = network_fn if network_fine is None else network_fine
-        raw = network_query_fn(pts, viewdirs, run_fn)
+        raw = network_query_fn(pts, viewdirs, run_fn, appearance_latent=appearance_latent)
         rgb_map, disp_map, acc_map, weights, depth_map = raw2outputs(
             raw, z_vals, rays_d)
 
@@ -286,6 +293,9 @@ def render(H, W, focal,
       acc_map: [batch_size]. Accumulated opacity (alpha) along a ray.
       extras: dict with everything returned by render_rays().
     """
+
+    if kwargs['appearance_latent'] is None:
+        raise ValueError('CAUGHT YOA')
 
     if c2w is not None:
         # special case to render full image
@@ -375,7 +385,7 @@ def render_path(render_poses, hwf, chunk, render_kwargs, gt_imgs=None, savedir=N
     return rgbs, disps
 
 
-def create_nerf(args):
+def create_nerf(args, init_nerf_model=init_nerf_model):
     """Instantiate NeRF's MLP model."""
 
     embed_fn, input_ch = get_embedder(args.multires, args.i_embed)
@@ -390,7 +400,8 @@ def create_nerf(args):
     model = init_nerf_model(
         D=args.netdepth, W=args.netwidth,
         input_ch=input_ch, output_ch=output_ch, skips=skips,
-        input_ch_views=input_ch_views, use_viewdirs=args.use_viewdirs)
+        input_ch_views=input_ch_views, use_viewdirs=args.use_viewdirs,
+        appearance_dim=args.appearance_dim)
     grad_vars = model.trainable_variables
     models = {'model': model}
 
@@ -399,15 +410,17 @@ def create_nerf(args):
         model_fine = init_nerf_model(
             D=args.netdepth_fine, W=args.netwidth_fine,
             input_ch=input_ch, output_ch=output_ch, skips=skips,
-            input_ch_views=input_ch_views, use_viewdirs=args.use_viewdirs)
+            input_ch_views=input_ch_views, use_viewdirs=args.use_viewdirs,
+            appearance_dim=args.appearance_dim)
         grad_vars += model_fine.trainable_variables
         models['model_fine'] = model_fine
 
-    def network_query_fn(inputs, viewdirs, network_fn): return run_network(
+    def network_query_fn(inputs, viewdirs, network_fn, appearance_latent=None): return run_network(
         inputs, viewdirs, network_fn,
         embed_fn=embed_fn,
         embeddirs_fn=embeddirs_fn,
-        netchunk=args.netchunk)
+        netchunk=args.netchunk,
+        appearance_latent=appearance_latent)
 
     render_kwargs_train = {
         'network_query_fn': network_query_fn,
@@ -528,6 +541,8 @@ def config_parser():
                         help='render the test set instead of render_poses path')
     parser.add_argument("--render_factor", type=int, default=0,
                         help='downsampling factor to speed up rendering, set 4 or 8 for fast preview')
+    parser.add_argument("--appearance_dim", type=int, default=0,
+                        help='Set the dimension of the appearance latent (0=off, default=0)')
 
     # dataset options
     parser.add_argument("--dataset_type", type=str, default='llff',
@@ -671,8 +686,10 @@ def train():
             file.write(open(args.config, 'r').read())
 
     # Create nerf model
+    # def nerf_model(*args, **kwargs): init_nerf_appearance_model(*args, **kwargs, N=len(i_train))
+    def nerf_model(*args, **kwargs): return NerfAppearance(*args, **kwargs, N=len(i_train))
     render_kwargs_train, render_kwargs_test, start, grad_vars, models = create_nerf(
-        args)
+        args, nerf_model)
 
     bds_dict = {
         'near': tf.cast(near, tf.float32),
@@ -753,6 +770,13 @@ def train():
     print('TEST views are', i_test)
     print('VAL views are', i_val)
 
+    # appearance_latents = None
+    # if args.appearance_dim > 0:
+    #     appearance_latents = [
+    #         tf.Variable(np.random.rand(args.appearance_dim), dtype=tf.keras.backend.floatx(), trainable=True)
+    #         for _ in i_train
+    #     ]
+
     # Summary writers
     writer = tf.contrib.summary.create_file_writer(
         os.path.join(basedir, 'summaries', expname))
@@ -782,6 +806,9 @@ def train():
             img_i = np.random.choice(i_train)
             target = images[img_i]
             pose = poses[img_i, :3, :4]
+            # appearance_latent = appearance_latents[img_i]
+            render_kwargs_train['appearance_latent'] = np.float32(img_i)
+            render_kwargs_test['appearance_latent'] = 0.
 
             if N_rand is not None:
                 rays_o, rays_d = get_rays(H, W, focal, pose)

@@ -75,9 +75,56 @@ def get_embedder(multires, i=0):
     return embed, embedder_obj.out_dim
 
 
+def init_nerf_appearance_model(D=8, W=256, input_ch=3, input_ch_views=3, output_ch=4, skips=[4], use_viewdirs=False, appearance_dim=0, N=0):
+    nerf_model = init_nerf_model(D, W, input_ch, input_ch_views, output_ch, skips, use_viewdirs, appearance_dim)
+
+    if appearance_dim > 0:
+        assert N > 0
+        appearance_latents = tf.Variable(np.random.rand(N, appearance_dim), trainable=True)
+        inputs = tf.keras.Input(shape=(input_ch + input_ch_views + 1))
+        input_ch_view, i_train = tf.split(inputs, [input_ch + input_ch_views, 1], -1)
+        appearance_latent = appearance_latents[i_train]
+        outputs = tf.concat([input_ch_view, appearance_latent], -1)  # concat viewdirs + appearance latent
+    else:
+        inputs = tf.keras.Input(shape=(input_ch + input_ch_views))
+        outputs = inputs
+    outputs = nerf_model(inputs)
+    model = tf.keras.Model(inputs=inputs, outputs=outputs)
+
+    model.latents_0 = appearance_latents
+
+    return model
+
+
+class NerfAppearance(tf.keras.Model):
+
+    def __init__(self, D=8, W=256, input_ch=3, input_ch_views=3, output_ch=4, skips=[4], use_viewdirs=False, appearance_dim=0, N=0):
+
+        super().__init__()
+
+        self.nerf_model = init_nerf_model(D, W, input_ch, input_ch_views, output_ch, skips, use_viewdirs, appearance_dim)
+        self.input_ch, self.input_ch_views, self.output_ch = input_ch, input_ch_views, output_ch
+        self.appearance_dim = appearance_dim
+
+        # if self.appearance_dim > 0:
+        #     assert N > 0
+        self.appearance_latents = tf.Variable(np.random.rand(N, appearance_dim), trainable=True, dtype=tf.float32)
+
+    def call(self, inputs):
+        input_ch_view, i_train = tf.split(inputs, [self.input_ch + self.input_ch_views, 1], -1)
+        # i_train = int(i_train)
+        i = int(i_train[0,0])  # TODO: Workaround, only works if batching is turned off!
+        appearance_latent = tf.broadcast_to(self.appearance_latents[i], [i_train.shape[0], self.appearance_latents[i].shape[0]])
+        return self.forward(input_ch_view, appearance_latent)
+
+    def forward(self, input_ch_view, appearance_latent):
+        inp = tf.concat([input_ch_view, appearance_latent], -1)
+        return self.nerf_model(inp)
+
+
 # Model architecture
 
-def init_nerf_model(D=8, W=256, input_ch=3, input_ch_views=3, output_ch=4, skips=[4], use_viewdirs=False):
+def init_nerf_model(D=8, W=256, input_ch=3, input_ch_views=3, output_ch=4, skips=[4], use_viewdirs=False, appearance_dim=0):
 
     relu = tf.keras.layers.ReLU()
     def dense(W, act=relu): return tf.keras.layers.Dense(W, activation=act)
@@ -87,8 +134,12 @@ def init_nerf_model(D=8, W=256, input_ch=3, input_ch_views=3, output_ch=4, skips
     input_ch = int(input_ch)
     input_ch_views = int(input_ch_views)
 
-    inputs = tf.keras.Input(shape=(input_ch + input_ch_views))
-    inputs_pts, inputs_views = tf.split(inputs, [input_ch, input_ch_views], -1)
+    if appearance_dim > 0:
+        inputs = tf.keras.Input(shape=(input_ch + input_ch_views + appearance_dim))
+        inputs_pts, inputs_views, appearance_latent = tf.split(inputs, [input_ch, input_ch_views, appearance_dim], -1)
+    else:
+        inputs = tf.keras.Input(shape=(input_ch + input_ch_views))
+        inputs_pts, inputs_views = tf.split(inputs, [input_ch, input_ch_views], -1)
     inputs_pts.set_shape([None, input_ch])
     inputs_views.set_shape([None, input_ch_views])
 
@@ -102,8 +153,12 @@ def init_nerf_model(D=8, W=256, input_ch=3, input_ch_views=3, output_ch=4, skips
     if use_viewdirs:
         alpha_out = dense(1, act=None)(outputs)
         bottleneck = dense(256, act=None)(outputs)
-        inputs_viewdirs = tf.concat(
-            [bottleneck, inputs_views], -1)  # concat viewdirs
+        if appearance_dim > 0:
+            inputs_viewdirs = tf.concat(
+                [bottleneck, inputs_views, appearance_latent], -1)  # concat viewdirs + appearance latent
+        else:
+            inputs_viewdirs = tf.concat(
+                [bottleneck, inputs_views], -1)  # concat viewdirs
         outputs = inputs_viewdirs
         # The supplement to the paper states there are 4 hidden layers here, but this is an error since
         # the experiments were actually run with 1 hidden layer, so we will leave it as 1.
