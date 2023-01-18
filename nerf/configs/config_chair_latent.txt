@@ -1,0 +1,19 @@
+expname = 1031fc859dc3177a2f84cb7932f866fd
+basedir = ./nerf/logs/chairs_latent
+datadir = ./data/shapenet/chairs_latent/1031fc859dc3177a2f84cb7932f866fd
+dataset_type = blender
+
+half_res = True
+no_batching = True
+
+N_samples = 64
+N_importance = 64
+
+use_viewdirs = True
+
+white_bkgd = True
+
+N_rand = 1024
+precrop_iters=500
+
+appearance_dim = 3
